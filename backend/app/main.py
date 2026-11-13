@@ -1,10 +1,11 @@
 import base64
 import json
+import re
 from io import BytesIO
 from typing import Any
 
 import cv2
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
@@ -42,6 +43,32 @@ class Table(BaseModel):
     column_widths: list[int] | None = None
     row_heights: list[int] | None = None
     cells: list[Cell]
+    class_name: str | None = None
+    stream: str | None = None
+    section: str | None = None
+
+
+MAX_CONSTRAINT_LENGTH = 80
+
+
+def _clean_constraint(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    if len(cleaned) > MAX_CONSTRAINT_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The {label} is too long. Maximum length is {MAX_CONSTRAINT_LENGTH} characters.",
+        )
+    return cleaned or None
+
+
+def _read_constraints(class_name: str | None, stream: str | None, section: str | None) -> dict:
+    return {
+        "class_name": _clean_constraint(class_name, "class"),
+        "stream": _clean_constraint(stream, "stream"),
+        "section": _clean_constraint(section, "section"),
+    }
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -79,7 +106,13 @@ async def health() -> dict:
 
 
 @app.post("/api/preview")
-async def preview(file: UploadFile = File(...)) -> dict:
+async def preview(
+    file: UploadFile = File(...),
+    class_name: str | None = Form(None),
+    stream: str | None = Form(None),
+    section: str | None = Form(None),
+) -> dict:
+    constraints = _read_constraints(class_name, stream, section)
     data = await _read_upload(file)
     image = _image_from_upload(data)
     try:
@@ -105,11 +138,18 @@ async def preview(file: UploadFile = File(...)) -> dict:
             "column_widths": grid.column_widths,
             "row_heights": grid.row_heights,
         },
+        "constraints": constraints,
     }
 
 
 @app.post("/api/extract")
-async def extract(file: UploadFile = File(...)) -> dict:
+async def extract(
+    file: UploadFile = File(...),
+    class_name: str | None = Form(None),
+    stream: str | None = Form(None),
+    section: str | None = Form(None),
+) -> dict:
+    constraints = _read_constraints(class_name, stream, section)
     data = await _read_upload(file)
     image = _image_from_upload(data)
     try:
@@ -135,6 +175,7 @@ async def extract(file: UploadFile = File(...)) -> dict:
         }
         with_text, text_warnings = apply_cell_texts(geometry, raw_texts)
         table, warnings = validate_and_complete_table(with_text)
+        table.update(constraints)
         warnings.extend(text_warnings)
     except CropDetectionError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -181,10 +222,28 @@ async def export(table: Table) -> StreamingResponse:
                 end_row=row + item["rowspan"] - 1,
                 end_column=column + item["colspan"] - 1,
             )
+    details = workbook.create_sheet("Details")
+    details["A1"] = "Timetable details"
+    details["A1"].font = Font(name="Aptos", size=13, bold=True)
+    for index, (label, value) in enumerate(
+        (("Class", table.class_name), ("Stream", table.stream), ("Section", table.section)),
+        start=3,
+    ):
+        details.cell(index, 1, label).font = Font(name="Aptos", size=11, bold=True)
+        details.cell(index, 2, value or "")
+    details.column_dimensions["A"].width = 14
+    details.column_dimensions["B"].width = 32
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
-    headers = {"Content-Disposition": 'attachment; filename="timetable.xlsx"'}
+    filename_parts = [
+        cleaned
+        for part in (table.class_name, table.stream, table.section)
+        if part
+        if (cleaned := re.sub(r"[^A-Za-z0-9]+", "-", part).strip("-"))
+    ]
+    filename = f"timetable_{'_'.join(filename_parts)}.xlsx" if filename_parts else "timetable.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
