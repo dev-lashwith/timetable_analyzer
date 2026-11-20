@@ -57,9 +57,9 @@ Open `http://localhost:3000`. `NEXT_PUBLIC_API_URL` can point the frontend to a 
 ## Workflow
 
 1. Upload or drag in a PNG, JPEG, or WebP image.
-2. OpenCV crops and straightens the ruled table, then detects row boundaries, column boundaries, and merged cell spans. The crop preview shows the detected row/column/cell counts.
+2. OpenCV crops and straightens the ruled table, then detects row boundaries, column boundaries, and merged cell spans. The crop preview shows the detected row/column/cell counts. Hover over the original image or the detected crop to zoom inside the image itself, following the cursor (Amazon / Flipkart style). Click to open a full-screen zoom view, then press `Esc` or click the backdrop to close it.
 3. Review the crop and grid counts, then send only nonblank cell crops from the table to the configured Ollama model for text transcription.
-4. Review or edit the cells in the table below the uploader.
+4. Review or edit the cells in the table below the uploader. A unique-values table lists every distinct cell value from the cropped timetable. Two more tables let you classify those extracted values as teachers or subjects using dropdowns; a value added to one table is removed from the other.
 5. Download an Excel workbook. Cell positions, empty cells, `rowspan`/`colspan` merges, and detected row/column proportions are carried into the sheet.
 
 The backend rejects an image if it cannot identify a separate timetable crop rather than forwarding the full page. The model cannot add or change rows, columns, or merges. If it omits a cell's text, the API leaves that cell blank and shows a review warning. Grid overlaps, malformed JSON, missing models, and unreachable Ollama servers return clear errors.
