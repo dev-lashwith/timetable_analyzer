@@ -75,6 +75,9 @@ h2 { font-size: 22px; line-height: 1.25; letter-spacing: -.75px; margin: 6px 0 0
 .mini-tag-blue { color: var(--blue); background: var(--soft-blue); }
 .image-frame { height: 360px; overflow: hidden; display: grid; place-items: center; background-color: #f7f7f3; border-radius: 6px; }
 .source-frame { background-image: radial-gradient(#dfe1d9 .7px, transparent .7px); background-size: 8px 8px; }
+.pdf-source-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: #859083; font-size: 11px; }
+.pdf-source-placeholder strong { max-width: 100%; overflow-wrap: anywhere; color: #374151; font-size: 13px; }
+.pdf-badge { display: inline-grid; place-items: center; width: 42px; height: 48px; border-radius: 5px; background: #fdecec; color: #c0392b; font-size: 11px; font-weight: 800; letter-spacing: .5px; }
 .image-frame img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
 .crop-frame { padding: 8px; }
 .crop-empty { color: #9da398; font-size: 11px; }

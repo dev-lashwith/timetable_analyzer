@@ -25,11 +25,23 @@ type CropInfo = {
   width: number;
   height: number;
   grid: { row_count: number; column_count: number; cell_count: number; width: number; height: number };
+  source_page?: number | null;
+  source_page_count?: number | null;
 };
+
+const ACCEPTED_FILE_TYPES = "image/png,image/jpeg,image/webp,application/pdf,.pdf";
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Something went wrong. Please try again.";
+}
+
+function isPdfFile(file: File) {
+  return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+}
+
+function isSupportedFile(file: File) {
+  return file.type.startsWith("image/") || isPdfFile(file);
 }
 
 function getApiError(payload: unknown) {
@@ -48,6 +60,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [pdfName, setPdfName] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [cropUrl, setCropUrl] = useState("");
   const [cropInfo, setCropInfo] = useState<CropInfo | null>(null);
@@ -170,7 +183,7 @@ export default function Home() {
     else setSubjects((current) => current.filter((item) => item !== value));
   }
 
-  async function prepareImage(nextFile: File) {
+  async function prepareFile(nextFile: File) {
     if (!constraintsReady) {
       showToast("Please fill in class, stream, and section above before uploading the timetable.");
       return;
@@ -180,14 +193,16 @@ export default function Home() {
     setValidation(null);
     setCropInfo(null);
     setFile(nextFile);
+    setPdfName(isPdfFile(nextFile) ? nextFile.name : "");
     setTeachers([]);
     setSubjects([]);
     setTeacherSelection("");
     setSubjectSelection("");
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
     if (cropUrl) URL.revokeObjectURL(cropUrl);
-    const nextSource = URL.createObjectURL(nextFile);
-    setSourceUrl(nextSource);
+    // A PDF cannot be shown in an <img>; the API sends back a PNG of the
+    // selected page instead. Images can use a local object URL immediately.
+    setSourceUrl(isPdfFile(nextFile) ? "" : URL.createObjectURL(nextFile));
     setCropUrl("");
     setLoading("preview");
     try {
@@ -199,9 +214,18 @@ export default function Home() {
       const response = await fetch(`${API_URL}/api/preview`, { method: "POST", body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(getApiError(data));
+      if (data.source_png_base64) {
+        const sourceBlob = await fetch(`data:image/png;base64,${data.source_png_base64}`).then((result) => result.blob());
+        setSourceUrl(URL.createObjectURL(sourceBlob));
+      }
       const cropBlob = await fetch(`data:image/png;base64,${data.crop_png_base64}`).then((result) => result.blob());
       setCropUrl(URL.createObjectURL(cropBlob));
-      setCropInfo({ ...data.crop, grid: data.grid });
+      setCropInfo({
+        ...data.crop,
+        grid: data.grid,
+        source_page: data.source_page,
+        source_page_count: data.source_page_count,
+      });
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -211,11 +235,11 @@ export default function Home() {
 
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
     const nextFile = event.target.files?.[0];
-    if (nextFile) void prepareImage(nextFile);
+    if (nextFile) void prepareFile(nextFile);
     event.target.value = "";
   }
 
-  function chooseImage() {
+  function chooseFile() {
     if (!constraintsReady) {
       showToast("Please fill in class, stream, and section above before uploading the timetable.");
       return;
@@ -235,8 +259,8 @@ export default function Home() {
       return;
     }
     const nextFile = event.dataTransfer.files[0];
-    if (nextFile && nextFile.type.startsWith("image/")) void prepareImage(nextFile);
-    else setError("Choose a PNG, JPEG, or WebP image.");
+    if (nextFile && isSupportedFile(nextFile)) void prepareFile(nextFile);
+    else setError("Choose a PNG, JPEG, WebP image, or PDF.");
   }
 
   async function extract() {
@@ -353,7 +377,7 @@ export default function Home() {
       </header>
 
       <section className="intro" id="top">
-        <div className="eyebrow"><span className="eyebrow-line" /> IMAGE TO SPREADSHEET</div>
+        <div className="eyebrow"><span className="eyebrow-line" /> IMAGE / PDF TO SPREADSHEET</div>
         <h1>Your timetable,<br /><span>ready to edit.</span></h1>
         
       </section>
@@ -382,17 +406,17 @@ export default function Home() {
         </div>
       </section>
 
-      <section className={`upload-card ${dragging ? "is-dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop} aria-label="Upload timetable image">
+      <section className={`upload-card ${dragging ? "is-dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop} aria-label="Upload timetable image or PDF">
         <div className="upload-main">
           <div className="upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 15v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></div>
           <div className="upload-copy">
-            <strong>{file ? file.name : "Drop your timetable image here"}</strong>
-            <span>{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · PNG, JPG or WebP` : "PNG, JPG or WebP · up to 20 MB"}</span>
+            <strong>{file ? file.name : "Drop your timetable image or PDF here"}</strong>
+            <span>{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · PNG, JPG, WebP or PDF` : "PNG, JPG, WebP or PDF · up to 20 MB"}</span>
           </div>
-          <button className={`button button-secondary choose-button ${constraintsReady ? "" : "button-locked"}`} onClick={chooseImage} disabled={loading !== ""} aria-disabled={!constraintsReady} title={constraintsReady ? undefined : "Fill in class, stream, and section first"}>{file ? "Choose another" : "Choose image"}</button>
-          <input ref={inputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={onFileChange} />
+          <button className={`button button-secondary choose-button ${constraintsReady ? "" : "button-locked"}`} onClick={chooseFile} disabled={loading !== ""} aria-disabled={!constraintsReady} title={constraintsReady ? undefined : "Fill in class, stream, and section first"}>{file ? "Choose another" : "Choose file"}</button>
+          <input ref={inputRef} className="visually-hidden" type="file" accept={ACCEPTED_FILE_TYPES} onChange={onFileChange} />
         </div>
-        <div className="upload-foot"><span>{constraintsReady ? "Only the detected timetable crop is sent to the local vision model." : "Add class, stream, and section above to enable image upload."}</span><span className="step-label">01 <i /> 02 <i /> 03</span></div>
+        <div className="upload-foot"><span>{constraintsReady ? "Only the detected timetable crop is sent to the local vision model." : "Add class, stream, and section above to enable upload."}</span><span className="step-label">01 <i /> 02 <i /> 03</span></div>
       </section>
 
       {error && <div className="error-banner" role="alert"><span className="error-mark">!</span><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
@@ -400,9 +424,9 @@ export default function Home() {
       {toast && <div className="toast" role="alert" aria-live="assertive"><span className="toast-mark">!</span><span className="toast-text">{toast}</span><button className="toast-close" aria-label="Dismiss message" onClick={dismissToast}>×</button></div>}
 
       {(sourceUrl || loading === "preview") && <section className="preview-section" aria-live="polite">
-        <div className="section-heading"><div><div className="section-kicker">STEP 1 <span>·</span> CHECK THE CROP</div><h2>We found your table.</h2></div>{cropInfo && <div className="crop-dimensions">{cropInfo.grid.row_count} rows × {cropInfo.grid.column_count} columns · {cropInfo.grid.cell_count} cells</div>}</div>
+        <div className="section-heading"><div><div className="section-kicker">STEP 1 <span>·</span> CHECK THE CROP</div><h2>We found your table.</h2></div>{cropInfo && <div className="crop-dimensions">{cropInfo.grid.row_count} rows × {cropInfo.grid.column_count} columns · {cropInfo.grid.cell_count} cells{cropInfo.source_page ? ` · page ${cropInfo.source_page}${cropInfo.source_page_count ? ` of ${cropInfo.source_page_count}` : ""}` : ""}</div>}</div>
         <div className="preview-grid">
-          <article className="preview-card source-card"><div className="preview-card-head"><span>ORIGINAL IMAGE</span><span className="mini-tag">Source</span></div><ZoomImage src={sourceUrl} alt="Uploaded timetable source" className="source-frame" /></article>
+          <article className="preview-card source-card"><div className="preview-card-head"><span>ORIGINAL SOURCE</span><span className="mini-tag">{pdfName ? "PDF page" : "Source"}</span></div><ZoomImage src={sourceUrl} alt="Uploaded timetable source" className="source-frame">{pdfName ? <div className="pdf-source-placeholder"><span className="pdf-badge">PDF</span><strong>{pdfName}</strong><span>{loading === "preview" ? "Rendering the page…" : "Page preview unavailable"}</span></div> : <div className="crop-empty">The source preview will appear here.</div>}</ZoomImage></article>
           <article className="preview-card crop-card"><div className="preview-card-head"><span>DETECTED TIMETABLE</span><span className="mini-tag mini-tag-blue">Crop only</span></div><ZoomImage src={cropUrl} alt="Detected timetable crop" className="crop-frame">{loading === "preview" ? <div className="loading-state"><span className="spinner" />Finding table borders…</div> : <div className="crop-empty">The table crop preview will appear here.</div>}</ZoomImage></article>
         </div>
         {cropUrl && <div className="action-row"><p>Check that the crop includes the full table and nothing extra.</p><button className="button button-primary" onClick={() => void extract()} disabled={loading !== ""}>{loading === "extract" ? <><span className="spinner spinner-white" /> Reading timetable…</> : <>Extract timetable <span aria-hidden="true">→</span></>}</button></div>}

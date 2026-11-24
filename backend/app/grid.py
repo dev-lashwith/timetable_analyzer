@@ -114,7 +114,11 @@ def _find_boundaries(mask: np.ndarray, axis: int) -> list[int]:
     projection = np.count_nonzero(mask, axis=1 if axis == 0 else 0)
     if projection.size == 0 or projection.max() == 0:
         return []
-    span = width if axis == 0 else height
+    # Projection length is height for horizontal rules (axis 0) and width for
+    # vertical rules (axis 1). Using the opposite dimension makes both the
+    # detection threshold and the minimum separation wrong on non-square crops,
+    # which lets closely spaced rule edges survive and trip the grid checks.
+    span = height if axis == 0 else width
     absolute_floor = span * (0.055 if axis == 0 else 0.025)
     relative_floor = projection.max() * (0.085 if axis == 0 else 0.07)
     threshold = max(absolute_floor, relative_floor)

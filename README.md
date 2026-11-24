@@ -1,6 +1,6 @@
 # Timetable Extractor
 
-A small local-first app that finds and straightens a timetable box, detects its row, column, and merge geometry with OpenCV, and sends only that crop to an Ollama vision model to transcribe cell text. The editable result preserves blank cells and merged cells and can be exported as an `.xlsx` workbook.
+A small local-first app that accepts an image (PNG, JPEG, WebP) or a PDF, finds and straightens the timetable box, detects its row, column, and merge geometry with OpenCV, and sends only that crop to an Ollama vision model to transcribe cell text. The editable result preserves blank cells and merged cells and can be exported as an `.xlsx` workbook.
 
 ## Project layout
 
@@ -56,8 +56,8 @@ Open `http://localhost:3000`. `NEXT_PUBLIC_API_URL` can point the frontend to a 
 
 ## Workflow
 
-1. Upload or drag in a PNG, JPEG, or WebP image.
-2. OpenCV crops and straightens the ruled table, then detects row boundaries, column boundaries, and merged cell spans. The crop preview shows the detected row/column/cell counts. Hover over the original image or the detected crop to zoom inside the image itself, following the cursor (Amazon / Flipkart style). Click to open a full-screen zoom view, then press `Esc` or click the backdrop to close it.
+1. Upload or drag in a PNG, JPEG, WebP image, or a PDF. For a multi-page PDF, the app checks the pages in order and uses the first one with a detectable ruled table (up to the first 20 pages); a rendered preview of that page replaces the source image in the UI.
+2. OpenCV crops and straightens the ruled table, then detects row boundaries, column boundaries, and merged cell spans. The crop preview shows the detected row/column/cell counts. Hover over the original source or the detected crop to zoom inside the image itself, following the cursor (Amazon / Flipkart style). Click to open a full-screen zoom view, then press `Esc` or click the backdrop to close it.
 3. Review the crop and grid counts, then send only nonblank cell crops from the table to the configured Ollama model for text transcription.
 4. Review or edit the cells in the table below the uploader. A unique-values table lists every distinct cell value from the cropped timetable. Two more tables let you classify those extracted values as teachers or subjects using dropdowns; a value added to one table is removed from the other.
 5. Download an Excel workbook. Cell positions, empty cells, `rowspan`/`colspan` merges, and detected row/column proportions are carried into the sheet.
@@ -80,4 +80,5 @@ python -m pytest
 - The vision model may misread small text or miss text in a cell. Review and edit the extracted table before using it; omitted text and unreadable cells are flagged.
 - The editor preserves merged cell spans. This MVP does not provide controls for adding/removing rows, columns, or changing merge geometry.
 - Excel styling is intentionally plain. The exported workbook preserves structure and text, not the original image's colors, fonts, or exact pixel dimensions.
-- Images are handled locally by the frontend/backend and sent to the configured local Ollama server. No external vision service is called.
+- PDFs are rasterized locally at `PDF_RENDER_DPI` (default 200 DPI; set it in `backend/.env` to change quality). Password-protected PDFs and PDFs whose timetable has no visible rules are not supported.
+- Images and PDF pages are handled locally by the frontend/backend; only cell crops are sent to the configured local Ollama server. No external vision service is called.
