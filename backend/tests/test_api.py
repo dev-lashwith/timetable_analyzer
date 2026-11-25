@@ -1,5 +1,4 @@
 import asyncio
-import json
 from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
@@ -52,18 +51,52 @@ def test_discover_image_returns_one_candidate_without_a_pdf_page():
     assert body["page_count"] is None
     assert len(body["timetables"]) == 1
     assert body["timetables"][0]["page"] is None
+    assert body["timetables"][0]["semester_guess"] is None
 
 
-def test_extract_sends_only_detected_crop_to_ollama():
-    with patch("app.main.extract_cell_texts", new_callable=AsyncMock) as mocked_extract:
-        mocked_extract.return_value = json.dumps({"texts": [{"id": 0, "text": "Monday"}]})
-        response = asyncio.run(post_api("/api/extract", make_page()))
+def test_extract_sends_the_upload_to_sarvam(completed_extraction):
+    with patch("app.main.extract_documents_async", new_callable=AsyncMock) as mocked_extract:
+        mocked_extract.return_value = completed_extraction
+        image = make_page()
+        response = asyncio.run(post_api("/api/extract", image))
 
     assert response.status_code == 200
-    sent_image = mocked_extract.await_args.args[0]
-    assert sent_image.shape[0] * sent_image.shape[1] < 700 * 900 * 0.65
-    assert len(mocked_extract.await_args.args[1]) > 1
-    assert response.json()["table"]["cells"][0]["text"] == "Monday"
+    files = mocked_extract.await_args.args[0]
+    assert files[0][0] == "page.png"
+    assert files[0][1] == image
+    texts = [cell["text"] for cell in response.json()["table"]["cells"]]
+    assert "DSA" in texts
+    assert "Monday" in texts
+
+
+def test_health_reports_sarvam_configuration():
+    transport = httpx.ASGITransport(app=app)
+
+    async def request(path: str):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(path)
+
+    for path in ("/api/health", "/health"):
+        response = asyncio.run(request(path))
+        assert response.status_code == 200
+        body = response.json()
+        assert body["provider"] == "sarvam"
+        assert isinstance(body["api_key_configured"], bool)
+
+
+def test_v1_models_lists_sarvam_as_the_only_provider():
+    transport = httpx.ASGITransport(app=app)
+
+    async def request():
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/v1/models")
+
+    response = asyncio.run(request())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert [item["id"] for item in body["data"]] == ["sarvam-doc-ai"]
+    assert body["data"][0]["owned_by"] == "sarvam"
 
 
 def test_preview_echoes_timetable_constraints():
@@ -83,9 +116,9 @@ def test_preview_echoes_timetable_constraints():
     }
 
 
-def test_extract_stores_constraints_with_the_table():
-    with patch("app.main.extract_cell_texts", new_callable=AsyncMock) as mocked_extract:
-        mocked_extract.return_value = json.dumps({"texts": [{"id": 0, "text": "Monday"}]})
+def test_extract_stores_review_constraints_with_the_table(completed_extraction):
+    with patch("app.main.extract_documents_async", new_callable=AsyncMock) as mocked_extract:
+        mocked_extract.return_value = completed_extraction
         response = asyncio.run(
             post_api(
                 "/api/extract",

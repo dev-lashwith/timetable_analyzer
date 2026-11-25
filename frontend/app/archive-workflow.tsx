@@ -109,6 +109,23 @@ export default function ArchiveWorkflow() {
     finally { setUploading(false); }
   }
 
+  async function deleteDocument(doc: DocumentRow) {
+    if (["queued", "processing"].includes(doc.status)) return;
+    const accepted = window.confirm(`Delete “${doc.filename}”, its original PDF, and all extracted timetable records? This cannot be undone.`);
+    if (!accepted) return;
+    setBusy(`delete:${doc.id}`); setError(""); setMessage("");
+    try {
+      await api<null>(`/api/documents/${doc.id}`, { method: "DELETE" });
+      setDocuments((current) => current.filter((item) => item.id !== doc.id));
+      if (activeDocumentId === doc.id) { setActiveDocumentId(""); setDetail(null); setReviewId(""); }
+      if (selected?.document_id === doc.id) setSelected(null);
+      setOptionsRefresh((value) => value + 1);
+      setMessage(`Deleted ${doc.filename} and its stored timetable records.`);
+      await refreshDocuments();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete this document."); }
+    finally { setBusy(""); }
+  }
+
   function updateField(field: keyof Timetable, value: string) {
     if (!review || !detail) return;
     const next = { ...review, [field]: value || null } as Timetable;
@@ -129,7 +146,7 @@ export default function ArchiveWorkflow() {
       const saved = await api<Timetable>(`/api/timetables/${review.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ academic_year: review.academic_year, semester: review.semester, class_name: review.class_name,
-          section: review.section, stream: review.stream, room: review.room, table_type: review.table_type,
+          section: review.section, stream: review.stream, room: review.room,
           cells: review.cells.map((cell) => ({ row: cell.row, column: cell.column, text: cell.text })) }),
       });
       if (detail) setDetail({ ...detail, tables: detail.tables.map((table) => table.id === saved.id ? saved : table) });
@@ -168,7 +185,7 @@ export default function ArchiveWorkflow() {
       <section className="archive-intro" id="archive">
         <div className="eyebrow"><span className="eyebrow-line" /> PDF TO SEARCHABLE TIMETABLES</div>
         <h1>One archive,<br /><span>every class and room.</span></h1>
-        <p>Upload a department PDF. Pages are processed in the background, metadata and tables are saved for review, and published timetables become available through dependent filters.</p>
+        <p>Upload a department PDF. Pages are processed in the background, class timetable metadata is saved for review, and published timetables become available through dependent filters.</p>
       </section>
 
       <section className="archive-card" aria-label="Upload department timetable PDF">
@@ -184,9 +201,14 @@ export default function ArchiveWorkflow() {
 
       <section className="archive-section">
         <div className="section-heading"><div><div className="section-kicker">02 <span>·</span> PROCESSING & REVIEW</div><h2>Stored documents</h2></div><span className="crop-dimensions">{documents.length} PDF{documents.length === 1 ? "" : "s"}</span></div>
-        {documents.length ? <div className="document-list">{documents.map((doc) => <button key={doc.id} className={`document-row ${activeDocumentId === doc.id ? "is-selected" : ""}`} onClick={() => { setActiveDocumentId(doc.id); setMessage(""); setError(""); }}>
-          <span className="document-icon">PDF</span><span className="document-title"><strong>{doc.filename}</strong><small>{doc.page_count ? `${doc.page_count} pages · ` : ""}{doc.table_count} detected table{doc.table_count === 1 ? "" : "s"}</small></span><span className={`status-pill status-${doc.status}`}>{["queued", "processing"].includes(doc.status) && <i className="status-spinner" />}{statusLabel(doc.status)}</span>
-        </button>)}</div> : <div className="archive-empty">Uploaded PDFs will appear here with their processing and review status.</div>}
+        {documents.length ? <div className="document-list">{documents.map((doc) => <article key={doc.id} className={`document-row ${activeDocumentId === doc.id ? "is-selected" : ""}`}>
+          <button className="document-open" onClick={() => { setActiveDocumentId(doc.id); setMessage(""); setError(""); }}>
+            <span className="document-icon">PDF</span><span className="document-title"><strong>{doc.filename}</strong><small>{doc.page_count ? `${doc.page_count} pages · ` : ""}{doc.table_count} main timetable{doc.table_count === 1 ? "" : "s"}</small></span><span className={`status-pill status-${doc.status}`}>{["queued", "processing"].includes(doc.status) && <i className="status-spinner" />}{statusLabel(doc.status)}</span>
+          </button>
+          <button className="document-delete" onClick={() => void deleteDocument(doc)} disabled={busy !== "" || ["queued", "processing"].includes(doc.status)} title={["queued", "processing"].includes(doc.status) ? "Wait for processing to finish" : "Delete stored PDF and timetable records"} aria-label={`Delete ${doc.filename}`}>
+            {busy === `delete:${doc.id}` ? "Deleting…" : "Delete"}
+          </button>
+        </article>)}</div> : <div className="archive-empty">Uploaded PDFs will appear here with their processing and review status.</div>}
       </section>
 
       {activeDocument && detail && <section className="archive-section review-panel">
@@ -196,7 +218,7 @@ export default function ArchiveWorkflow() {
         {["queued", "processing"].includes(detail.status) && <div className="archive-loading"><span className="spinner" /> Processing pages, recognizing metadata and table cells… You can keep this page open and review the results when they are ready.</div>}
         {detail.tables.length > 0 && <>
           <div className="review-table-list">{detail.tables.map((table) => <button key={table.id} className={`review-table-chip ${reviewId === table.id ? "is-active" : ""}`} onClick={() => setReviewId(table.id)}>
-            <span>Page {table.source_page} · Table {table.table_index}</span><strong>{table.semester || table.table_type.replaceAll("_", " ")}</strong><small>{statusLabel(table.status)}</small>
+            <span>Page {table.source_page} · Main timetable</span><strong>{table.semester || "Timetable"}</strong><small>{statusLabel(table.status)}</small>
           </button>)}</div>
           {review && <>
             <div className="review-meta-grid">
@@ -206,9 +228,8 @@ export default function ArchiveWorkflow() {
               <label>Room<input value={review.room || ""} onChange={(event) => updateField("room", event.target.value)} placeholder="Detected room" /></label>
               <label>Section<input value={review.section || ""} onChange={(event) => updateField("section", event.target.value)} placeholder="Section" /></label>
               <label>Stream / department<input value={review.stream || ""} onChange={(event) => updateField("stream", event.target.value)} placeholder="Department or stream" /></label>
-              <label>Table type<select value={review.table_type} onChange={(event) => updateField("table_type", event.target.value)}><option value="timetable">Timetable</option><option value="faculty_allocation">Faculty allocation</option><option value="other">Other table</option></select></label>
             </div>
-            <div className="archive-table-title"><div><span className="section-kicker">PAGE {review.source_page} <span>·</span> {review.table_type.replaceAll("_", " ").toUpperCase()}</span><h3>Review detected cells</h3></div><span className={`status-pill status-${review.status}`}>{statusLabel(review.status)}</span></div>
+            <div className="archive-table-title"><div><span className="section-kicker">PAGE {review.source_page} <span>·</span> MAIN TIMETABLE</span><h3>Review detected cells</h3></div><span className={`status-pill status-${review.status}`}>{statusLabel(review.status)}</span></div>
             {review.warnings.map((warning, index) => <div className="archive-warning" key={index}>{warning}</div>)}
             <div className="archive-grid-wrap"><table className="archive-grid"><tbody>{Array.from({ length: review.row_count }, (_, row) => <tr key={row}>{Array.from({ length: review.column_count }, (_, column) => {
               const cellIndex = review.cells.findIndex((cell) => cell.row === row && cell.column === column);
@@ -221,7 +242,7 @@ export default function ArchiveWorkflow() {
                 <textarea aria-label={`Page ${review.source_page}, row ${row + 1}, column ${column + 1}`} value={cell.text} onChange={(event) => updateCell(cellIndex, event.target.value)} />
               </td>;
             })}</tr>)}</tbody></table></div>
-            <details className="source-details"><summary>Source page text and geometry</summary><p>Page {review.source_page} · crop x {review.source_bbox.x}, y {review.source_bbox.y}, width {review.source_bbox.width}, height {review.source_bbox.height} · page {review.page_size.width} × {review.page_size.height} pixels</p><pre>{review.raw_page_text || "No embedded PDF text; the page was read from its image."}</pre><p>Cell-level raw text and coordinates are included in the JSON download.</p></details>
+            <details className="source-details"><summary>Source timetable text and geometry</summary><p>Page {review.source_page} · crop x {review.source_bbox.x}, y {review.source_bbox.y}, width {review.source_bbox.width}, height {review.source_bbox.height} · page {review.page_size.width} × {review.page_size.height} pixels</p><pre>{review.raw_page_text || "No embedded PDF text; the page was read from its image."}</pre><p>Cell-level raw text and coordinates are included in the JSON download.</p></details>
             <div className="review-actions"><p>Check extracted values and metadata before publishing. Merged cells and cell coordinates stay attached to the source page.</p><div><button className="button button-secondary" onClick={() => void saveReview()} disabled={busy !== ""}>{busy === "save" ? "Saving…" : "Save review"}</button><button className="button button-primary" onClick={() => void transition("verify")} disabled={busy !== "" || review.status === "published"}>{busy === "verify" ? "Verifying…" : "Verify timetable"}</button><button className="button button-primary" onClick={() => void transition("publish")} disabled={busy !== "" || review.status !== "verified"}>{busy === "publish" ? "Publishing…" : "Publish"}</button></div></div>
           </>}
         </>}

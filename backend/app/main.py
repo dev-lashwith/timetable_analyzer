@@ -1,8 +1,12 @@
 import base64
-import json
 import re
+import time
+from contextlib import asynccontextmanager
 from io import BytesIO
+from pathlib import Path
 from typing import Any
+
+import cv2
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +16,7 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from .archive_api import mark_interrupted_documents_failed, router as archive_router
 from .config import FRONTEND_ORIGIN, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
 from .crop import (
     CropDetectionError,
@@ -24,21 +29,25 @@ from .crop import (
     is_pdf,
 )
 from .grid import GridDetectionError, analyze_table_grid
-from .ollama_client import OllamaError, extract_cell_texts, ollama_status
-from .semester import guess_semester_from_text
-from .validation import TableValidationError, apply_cell_texts, validate_and_complete_table
+from .sarvam_client import SarvamError, extract_documents_async, sarvam_status
+from .sarvam_mapping import _add_geometry, build_timetables
+from .validation import TableValidationError, validate_and_complete_table
 
 
-app = FastAPI(title="Timetable Extractor API", version="3.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await mark_interrupted_documents_failed()
+    yield
+
+
+app = FastAPI(title="Timetable Extractor API", version="3.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in FRONTEND_ORIGIN.split(",") if origin.strip()],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
-
-from .archive_api import router as archive_router
 
 app.include_router(archive_router)
 
@@ -57,6 +66,7 @@ class Table(BaseModel):
     column_widths: list[int] | None = None
     row_heights: list[int] | None = None
     cells: list[Cell]
+    academic_year: str | None = None
     class_name: str | None = None
     stream: str | None = None
     section: str | None = None
@@ -123,48 +133,51 @@ def _image_from_upload(data: bytes, page: int | None = None) -> DecodedUpload:
     return decoded
 
 
-def _decode_model_json(content: str) -> Any:
-    candidate = content.strip()
-    if candidate.startswith("```"):
-        candidate = candidate.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as error:
-        raise OllamaError(f"The model response was not valid JSON near character {error.pos}.") from error
+def _sarvam_upload(
+    data: bytes, filename: str, mime: str | None, page: int | None
+) -> tuple[list[tuple[str, bytes, str]], int | None]:
+    """Send the selected PDF page (or the uploaded image) to Sarvam."""
+    if page is not None and is_pdf(data):
+        decoded = _image_from_upload(data, page)
+        success, encoded = cv2.imencode(".png", decoded.image)
+        if not success:
+            raise SarvamError("The selected PDF page could not be prepared for Sarvam.")
+        name = f"{Path(filename or 'timetable').stem}_page_{decoded.page}.png"
+        return [(name, encoded.tobytes(), "image/png")], decoded.page
+    return [(filename or "timetable", data, mime or "application/octet-stream")], page
 
 
 async def _extract_table(
-    decoded: DecodedUpload,
+    data: bytes,
+    filename: str,
+    mime: str | None,
+    page: int | None,
     constraints: dict,
     semester: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    crop = detect_timetable_crop(decoded.image)
-    grid = analyze_table_grid(crop.image)
-    content = await extract_cell_texts(grid.image, grid.cells)
-    raw_texts = _decode_model_json(content)
-    geometry = {
-        "row_count": grid.row_count,
-        "column_count": grid.column_count,
-        "column_widths": grid.column_widths,
-        "row_heights": grid.row_heights,
-        "cells": [
-            {
-                "row": cell.row,
-                "column": cell.column,
-                "rowspan": cell.rowspan,
-                "colspan": cell.colspan,
-                "text": "",
-            }
-            for cell in grid.cells
-        ],
-    }
-    with_text, text_warnings = apply_cell_texts(geometry, raw_texts)
-    table, warnings = validate_and_complete_table(with_text)
-    table.update(constraints)
-    table["semester"] = semester
-    table["source_page"] = decoded.page
-    warnings.extend(text_warnings)
-    return table, {"valid": True, "errors": [], "warnings": warnings}
+    """Extract one timetable through Sarvam and map its JSON to an editable grid."""
+    files, selected_page = _sarvam_upload(data, filename, mime, page)
+    extraction = await extract_documents_async(files)
+    warnings: list[str] = []
+    if extraction.status == "partially_completed":
+        warnings.append("Sarvam completed this extraction with partial results. Review every cell.")
+    payload = extraction.data
+    if not isinstance(payload, dict):
+        raise SarvamError("Sarvam did not return a JSON object for this upload.")
+    tables = build_timetables(payload, warnings)
+    if not tables:
+        raise SarvamError("Sarvam did not return a usable timetable for this upload.")
+    checked, validation_warnings = validate_and_complete_table(tables[0])
+    checked.update({key: value for key, value in tables[0].items() if key not in checked})
+    _add_geometry(checked)
+    for key, value in constraints.items():
+        if value:
+            checked[key] = value
+    if semester:
+        checked["semester"] = semester
+    checked["source_page"] = selected_page or checked.get("source_page")
+    warnings.extend(validation_warnings)
+    return checked, {"valid": True, "errors": [], "warnings": warnings}
 
 
 def _fill_table_sheet(sheet: Worksheet, checked: dict[str, Any]) -> None:
@@ -226,9 +239,30 @@ def _workbook_response(workbook: Workbook, filename: str) -> StreamingResponse:
     )
 
 
+@app.get("/health", include_in_schema=False)
 @app.get("/api/health")
 async def health() -> dict:
-    return await ollama_status()
+    return await sarvam_status()
+
+
+@app.get("/v1/models", include_in_schema=False)
+async def models() -> dict:
+    """Minimal OpenAI-compatible listing for clients that probe for models.
+
+    Sarvam doc AI is an extraction API, not a chat model; this entry only tells
+    such clients which provider is configured. No local models are exposed.
+    """
+    status = await sarvam_status()
+    return {
+        "object": "list",
+        "data": [{
+            "id": "sarvam-doc-ai",
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "sarvam",
+            "configured": status["configured"],
+        }],
+    }
 
 
 @app.post("/api/discover")
@@ -265,11 +299,10 @@ async def discover(
 
     candidates = []
     for item in found:
-        guess = guess_semester_from_text(item.text)
         candidates.append({
             "page": item.page,
-            "semester_guess": guess.name,
-            "semester_confidence": guess.confidence,
+            "semester_guess": None,
+            "semester_confidence": "sarvam",
             "crop_png_base64": base64.b64encode(item.crop_png).decode("ascii"),
             "source_png_base64": base64.b64encode(item.source_png).decode("ascii"),
             "crop": item.crop,
@@ -336,16 +369,17 @@ async def extract(
     constraints = _read_constraints(class_name, stream, section)
     cleaned_semester = _clean_constraint(semester, "semester")
     data = await _read_upload(file)
-    decoded = _image_from_upload(data, page)
+    if not is_pdf(data):
+        _image_from_upload(data)
     try:
-        table, validation = await _extract_table(decoded, constraints, cleaned_semester)
+        table, validation = await _extract_table(
+            data, file.filename or "timetable", file.content_type, page, constraints, cleaned_semester
+        )
     except CropDetectionError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    except GridDetectionError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except TableValidationError as error:
         raise HTTPException(status_code=422, detail={"message": error.message, "errors": error.errors}) from error
-    except OllamaError as error:
+    except SarvamError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     return {"table": table, "validation": validation}
 
@@ -373,16 +407,18 @@ async def extract_many(
     for target in parsed_targets:
         cleaned_semester = _clean_constraint(target.semester, "semester")
         try:
-            decoded = _image_from_upload(data, target.page)
-            table, validation = await _extract_table(decoded, constraints, cleaned_semester)
+            table, validation = await _extract_table(
+                data, file.filename or "timetable", file.content_type, target.page,
+                constraints, cleaned_semester,
+            )
             tables.append({
                 "id": target.id,
-                "page": decoded.page,
+                "page": table.get("source_page"),
                 "semester": cleaned_semester,
                 "table": table,
                 "validation": validation,
             })
-        except (CropDetectionError, GridDetectionError, TableValidationError, OllamaError) as error:
+        except (CropDetectionError, GridDetectionError, TableValidationError, SarvamError) as error:
             failures.append({
                 "id": target.id,
                 "page": target.page,

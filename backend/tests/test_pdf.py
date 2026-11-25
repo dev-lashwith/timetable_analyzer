@@ -1,5 +1,4 @@
 import asyncio
-import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -25,12 +24,13 @@ def make_pdf(page_count: int = 1, table_on_page: int = 0) -> bytes:
     return output
 
 
-async def post_pdf(path: str, payload: bytes) -> httpx.Response:
+async def post_pdf(path: str, payload: bytes, data: dict | None = None) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.post(
             path,
             files={"file": ("timetable.pdf", payload, "application/pdf")},
+            data=data or {},
         )
 
 
@@ -51,19 +51,21 @@ def test_preview_selects_pdf_page_containing_the_table():
     response = asyncio.run(post_pdf("/api/preview", make_pdf(page_count=3, table_on_page=1)))
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["source_page"] == 2
-    assert body["source_page_count"] == 3
+    assert response.json()["source_page"] == 2
+    assert response.json()["source_page_count"] == 3
 
 
-def test_extract_reads_the_selected_pdf_page():
-    with patch("app.main.extract_cell_texts", new_callable=AsyncMock) as mocked_extract:
-        mocked_extract.return_value = json.dumps({"texts": [{"id": 0, "text": "Monday"}]})
-        response = asyncio.run(post_pdf("/api/extract", make_pdf(page_count=2, table_on_page=1)))
+def test_extract_sends_the_selected_pdf_page_to_sarvam(completed_extraction):
+    with patch("app.main.extract_documents_async", new_callable=AsyncMock) as mocked_extract:
+        mocked_extract.return_value = completed_extraction
+        response = asyncio.run(post_pdf(
+            "/api/extract", make_pdf(page_count=2, table_on_page=1), {"page": "2"}
+        ))
 
     assert response.status_code == 200
-    assert response.json()["table"]["cells"][0]["text"] == "Monday"
-    assert mocked_extract.await_count > 0
+    files = mocked_extract.await_args.args[0]
+    assert files[0][0] == "timetable_page_2.png"
+    assert response.json()["table"]["source_page"] == 2
 
 
 def test_invalid_pdf_returns_validation_error():

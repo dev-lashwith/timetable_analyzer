@@ -6,9 +6,13 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
+SARVAM_BASE_URL = os.getenv(
+    "SARVAM_BASE_URL", "https://api.sarvam.ai/doc-ai/v1"
+).rstrip("/")
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
+SARVAM_REQUEST_TIMEOUT_SECONDS = float(os.getenv("SARVAM_REQUEST_TIMEOUT_SECONDS", "60"))
+SARVAM_POLL_INTERVAL_SECONDS = float(os.getenv("SARVAM_POLL_INTERVAL_SECONDS", "2"))
+SARVAM_JOB_TIMEOUT_SECONDS = float(os.getenv("SARVAM_JOB_TIMEOUT_SECONDS", "900"))
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000

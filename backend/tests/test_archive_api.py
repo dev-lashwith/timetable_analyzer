@@ -6,8 +6,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
+from app.archive_api import mark_interrupted_documents_failed
 from app.main import app
-from app.models import AcademicYear, ClassGroup, Room, Semester, TimetableCell, TimetableRecord, UploadedDocument
+from app.models import AcademicYear, ClassGroup, FacultyAllocation, Room, Semester, TimetableCell, TimetableRecord, UploadedDocument
 
 
 @pytest.fixture
@@ -68,3 +69,76 @@ def test_verified_timetable_is_published_and_appears_in_dependent_filters(archiv
     exported_table = exported.json()["timetables"][0]
     assert exported_table["cells"][0]["raw_text"] == "Monday"
     assert exported_table["cells"][0]["coordinates"]["source_page_bbox"]["x"] == 1
+
+
+def test_legacy_letter_only_room_is_hidden_until_corrected(archive_session):
+    document_id, timetable_id = seed_review_timetable(archive_session)
+    with archive_session() as session:
+        record = session.get(TimetableRecord, timetable_id)
+        old_room = Room(label="CV", normalized_label="cv")
+        session.add(old_room)
+        session.flush()
+        record.room_id = old_room.id
+        record.status = "verified"
+        session.commit()
+
+    transport = httpx.ASGITransport(app=app)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            details = await client.get(f"/api/documents/{document_id}")
+            options = await client.get("/api/options")
+            published = await client.get(f"/api/timetables/{timetable_id}")
+            attempted_publish = await client.post(f"/api/timetables/{timetable_id}/publish")
+            return details, options, published, attempted_publish
+
+    details, options, published, attempted_publish = asyncio.run(run())
+    assert details.status_code == 200
+    assert details.json()["tables"][0]["room"] is None
+    assert details.json()["tables"][0]["entity_ids"]["room"] is None
+    assert "not accepted as a room number" in details.json()["tables"][0]["warnings"][-1]
+    assert options.json()["semesters"] == []
+    assert published.status_code == 404
+    assert attempted_publish.status_code == 422
+
+
+def test_delete_document_removes_original_pdf_and_extracted_rows(archive_session, tmp_path, monkeypatch):
+    document_id, timetable_id = seed_review_timetable(archive_session)
+    storage_dir = tmp_path / "stored-pdfs"
+    storage_dir.mkdir()
+    pdf_path = storage_dir / "department.pdf"
+    pdf_path.write_bytes(b"%PDF-mock")
+    monkeypatch.setattr("app.archive_api.STORAGE_DIR", storage_dir)
+    with archive_session() as session:
+        session.get(UploadedDocument, document_id).file_path = str(pdf_path)
+        session.commit()
+
+    transport = httpx.ASGITransport(app=app)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.delete(f"/api/documents/{document_id}")
+
+    response = asyncio.run(run())
+    assert response.status_code == 204
+    assert not pdf_path.exists()
+    with archive_session() as session:
+        assert session.get(UploadedDocument, document_id) is None
+        assert session.get(TimetableRecord, timetable_id) is None
+        assert session.query(TimetableCell).filter_by(timetable_id=timetable_id).count() == 0
+        assert session.query(FacultyAllocation).filter_by(timetable_id=timetable_id).count() == 0
+
+
+def test_interrupted_documents_are_failed_instead_of_resubmitted(archive_session):
+    document_id, _ = seed_review_timetable(archive_session)
+    with archive_session() as session:
+        session.get(UploadedDocument, document_id).status = "processing"
+        session.commit()
+
+    asyncio.run(mark_interrupted_documents_failed())
+
+    with archive_session() as session:
+        document = session.get(UploadedDocument, document_id)
+        assert document.status == "failed"
+        assert "interrupted" in document.error_message.casefold()
+

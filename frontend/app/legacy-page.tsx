@@ -98,7 +98,7 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const [constraints, setConstraints] = useState<Constraints>({ className: "", stream: "", section: "" });
   const [toast, setToast] = useState("");
-  const [modelInfo, setModelInfo] = useState<{ model: string | null; reachable: boolean } | null>(null);
+  const [sarvamConfigured, setSarvamConfigured] = useState<boolean | null>(null);
 
   const constraintsReady = Boolean(
     constraints.className.trim() && constraints.stream.trim() && constraints.section.trim(),
@@ -127,8 +127,8 @@ export default function Home() {
 
   useEffect(() => {
     fetch(`${API_URL}/api/health`).then((response) => response.json()).then((data) => {
-      setModelInfo({ model: data.configured_model, reachable: data.ollama_reachable });
-    }).catch(() => setModelInfo({ model: null, reachable: false }));
+      setSarvamConfigured(Boolean(data.api_key_configured));
+    }).catch(() => setSarvamConfigured(false));
   }, []);
 
   const cellMap = useMemo(() => {
@@ -660,7 +660,7 @@ export default function Home() {
         <div className="editor-footer"><p><span className="edit-dot" /> Click any cell to edit. Merged cells are preserved. Each semester becomes its own Excel sheet.</p><button className="button button-primary export-button" onClick={() => void exportXlsx()} disabled={loading !== ""}>{loading === "export" ? <><span className="spinner spinner-white" /> Preparing file…</> : <><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v9m0 0 3.3-3.3M10 12 6.7 8.7M4 14v2.5h12V14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg> Download Excel</>}</button></div>
       </section>}
 
-      <footer className="page-footer"><span>Made for schedules, built to keep their shape.</span><span className={`model-status ${modelInfo?.reachable ? "model-online" : ""}`}><span className="status-dot" /> {modelInfo?.model ? `Ollama · ${modelInfo.model}` : modelInfo?.reachable ? "Ollama is ready · set a vision model" : "Waiting for local Ollama"}</span></footer>
+      <footer className="page-footer"><span>Made for schedules, built to keep their shape.</span><span className={`model-status ${sarvamConfigured ? "model-online" : ""}`}><span className="status-dot" /> {sarvamConfigured === null ? "Checking Sarvam" : sarvamConfigured ? "Sarvam doc AI is configured" : "Set SARVAM_API_KEY in backend/.env"}</span></footer>
     </main>
   );
 }
