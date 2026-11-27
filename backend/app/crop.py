@@ -2,6 +2,9 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+import pymupdf
+
+from .config import MAX_PDF_PAGES, PDF_RENDER_DPI
 
 
 class CropDetectionError(ValueError):
@@ -23,8 +26,17 @@ def decode_image(data: bytes) -> np.ndarray:
     encoded = np.frombuffer(data, dtype=np.uint8)
     image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     if image is None or image.size == 0:
-        raise CropDetectionError("The uploaded file is not a readable PNG, JPEG, or WebP image.")
+        raise CropDetectionError("The uploaded file is not a readable PNG, JPEG, WebP image, or PDF.")
     return image
+
+
+@dataclass(frozen=True)
+class DecodedUpload:
+    image: np.ndarray
+    # PDF-only details, used for the source preview and status labels.
+    page: int | None = None
+    page_count: int | None = None
+    source_png: bytes | None = None
 
 
 def _line_mask(gray: np.ndarray) -> np.ndarray:
@@ -131,3 +143,59 @@ def detect_timetable_crop(image: np.ndarray) -> CropResult:
             "The table boundary is too close to the image edges to crop safely. Use an image with visible page margin around the timetable."
         )
     return CropResult(crop, x1, y1, x2 - x1, y2 - y1, original_width, original_height)
+
+
+def is_pdf(data: bytes) -> bool:
+    """Detect a PDF by its header rather than trusting the browser's MIME type."""
+    return data[:1024].lstrip().startswith(b"%PDF-")
+
+
+def _render_pdf_page(page: pymupdf.Page, scale: float) -> np.ndarray:
+    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+    rgb = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, 3)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def decode_upload(data: bytes) -> DecodedUpload:
+    """Decode an image, or rasterize the PDF page that contains the timetable."""
+    if not is_pdf(data):
+        return DecodedUpload(decode_image(data))
+
+    try:
+        document = pymupdf.open(stream=data, filetype="pdf")
+    except Exception as error:
+        raise CropDetectionError(
+            "The uploaded PDF could not be opened. Make sure it is a valid, unprotected PDF."
+        ) from error
+
+    with document:
+        page_count = document.page_count
+        if page_count == 0:
+            raise CropDetectionError("The uploaded PDF has no pages.")
+
+        scale = PDF_RENDER_DPI / 72
+        chosen: tuple[int, np.ndarray] | None = None
+        for index in range(min(page_count, MAX_PDF_PAGES)):
+            try:
+                image = _render_pdf_page(document.load_page(index), scale)
+            except Exception as error:
+                raise CropDetectionError(f"Could not read page {index + 1} of the PDF.") from error
+            try:
+                detect_timetable_crop(image)
+            except CropDetectionError:
+                # Keep the first readable page as a fallback so the final error
+                # still explains that no ruled table was found.
+                if chosen is None:
+                    chosen = (index, image)
+                continue
+            chosen = (index, image)
+            break
+
+        if chosen is None:
+            raise CropDetectionError("No readable pages were found in the PDF.")
+        index, image = chosen
+        preview_scale = min(1.0, 1200 / max(image.shape[:2]))
+        preview = cv2.resize(image, None, fx=preview_scale, fy=preview_scale, interpolation=cv2.INTER_AREA)
+        success, encoded = cv2.imencode(".png", preview)
+        source_png = encoded.tobytes() if success else None
+        return DecodedUpload(image, index + 1, page_count, source_png)

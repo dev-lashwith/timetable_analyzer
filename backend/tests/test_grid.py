@@ -30,6 +30,35 @@ def make_perspective_grid():
     return cv2.warpPerspective(table, transform, (width, height), borderValue=(255, 255, 255))
 
 
+def make_double_rule_grid(width: int, height: int, vertical: bool):
+    image = np.full((height, width, 3), 255, dtype=np.uint8)
+    if vertical:
+        x_lines = [40, 200, 400, 408, 600, 800, 1000, width - 40]
+        y_lines = [30, height // 4, height // 2, 3 * height // 4, height - 30]
+    else:
+        x_lines = [40, width // 4, width // 2, 3 * width // 4, width - 40]
+        y_lines = [30, 200, 400, 408, 600, 800, 1000, height - 30]
+    for x in x_lines:
+        cv2.line(image, (x, y_lines[0]), (x, y_lines[-1]), (0, 0, 0), 2)
+    for y in y_lines:
+        cv2.line(image, (x_lines[0], y), (x_lines[-1], y), (0, 0, 0), 2)
+    return image
+
+
+def test_merges_close_double_vertical_rules_on_wide_tables():
+    grid = analyze_table_grid(make_double_rule_grid(1200, 600, vertical=True))
+
+    assert grid.column_count == 6
+    assert min(grid.column_widths) > 8
+
+
+def test_merges_close_double_horizontal_rules_on_tall_tables():
+    grid = analyze_table_grid(make_double_rule_grid(600, 1200, vertical=False))
+
+    assert grid.row_count == 6
+    assert min(grid.row_heights) > 8
+
+
 def test_detects_grid_dimensions_and_merged_cells_from_rules():
     grid = analyze_table_grid(make_perspective_grid())
     assert grid.row_count == 4

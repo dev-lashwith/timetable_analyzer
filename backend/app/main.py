@@ -13,7 +13,7 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from pydantic import BaseModel
 
 from .config import FRONTEND_ORIGIN, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
-from .crop import CropDetectionError, decode_image, detect_timetable_crop
+from .crop import CropDetectionError, decode_upload, detect_timetable_crop
 from .grid import GridDetectionError, analyze_table_grid
 from .ollama_client import OllamaError, extract_cell_texts, ollama_status
 from .validation import TableValidationError, apply_cell_texts, validate_and_complete_table
@@ -74,20 +74,20 @@ def _read_constraints(class_name: str | None, stream: str | None, section: str |
 async def _read_upload(file: UploadFile) -> bytes:
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Image is too large. Maximum upload size is 20 MB.")
+        raise HTTPException(status_code=413, detail="File is too large. Maximum upload size is 20 MB.")
     if not data:
-        raise HTTPException(status_code=400, detail="Choose an image first.")
+        raise HTTPException(status_code=400, detail="Choose an image or PDF first.")
     return data
 
 
 def _image_from_upload(data: bytes):
     try:
-        image = decode_image(data)
+        decoded = decode_upload(data)
     except CropDetectionError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    if image.shape[0] * image.shape[1] > MAX_IMAGE_PIXELS:
+    if decoded.image.shape[0] * decoded.image.shape[1] > MAX_IMAGE_PIXELS:
         raise HTTPException(status_code=413, detail="Image dimensions are too large. Maximum is 40 megapixels.")
-    return image
+    return decoded
 
 
 def _decode_model_json(content: str) -> Any:
@@ -114,9 +114,9 @@ async def preview(
 ) -> dict:
     constraints = _read_constraints(class_name, stream, section)
     data = await _read_upload(file)
-    image = _image_from_upload(data)
+    decoded = _image_from_upload(data)
     try:
-        crop = detect_timetable_crop(image)
+        crop = detect_timetable_crop(decoded.image)
         grid = analyze_table_grid(crop.image)
     except CropDetectionError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -139,6 +139,11 @@ async def preview(
             "row_heights": grid.row_heights,
         },
         "constraints": constraints,
+        "source_page": decoded.page,
+        "source_page_count": decoded.page_count,
+        "source_png_base64": (
+            base64.b64encode(decoded.source_png).decode("ascii") if decoded.source_png else None
+        ),
     }
 
 
@@ -151,9 +156,9 @@ async def extract(
 ) -> dict:
     constraints = _read_constraints(class_name, stream, section)
     data = await _read_upload(file)
-    image = _image_from_upload(data)
+    decoded = _image_from_upload(data)
     try:
-        crop = detect_timetable_crop(image)
+        crop = detect_timetable_crop(decoded.image)
         grid = analyze_table_grid(crop.image)
         content = await extract_cell_texts(grid.image, grid.cells)
         raw_texts = _decode_model_json(content)
