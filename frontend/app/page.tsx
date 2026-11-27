@@ -791,16 +791,17 @@ export default function Home() {
   }
 
   return (
-    <main className="page-shell">
-      <header className="topbar">
+    <>
+    <header className="topbar">
+      <div className="topbar-inner">
         <a className="brand" href="#top" aria-label="FeelIQ Technologies Timetable Extractor home">
           <img className="brand-logo" src="/feeliq-logo.png" alt="FeelIQ Technologies" />
         </a>
-        
-      </header>
+      </div>
+    </header>
 
+    <main className="page-shell">
       <section className="intro" id="top">
-        <div className="eyebrow"><span className="eyebrow-line" /> IMAGE / PDF TO SPREADSHEET</div>
         <h1>Your timetable,<br /><span>ready to edit.</span></h1>
         
       </section>
@@ -915,7 +916,7 @@ export default function Home() {
           {selectedPage && <span className="constraint-chip"><span>Source</span><strong>Page {selectedPage.page_number}{selectedPage.crop_confidence != null ? ` · ${Math.round(selectedPage.crop_confidence * 100)}% crop` : ""}</strong></span>}
           {selectedTimetableId && <span className="constraint-chip"><span>Verification</span><strong>{verificationStatus.replaceAll("_", " ")}</strong></span>}
         </div>
-        {validation && (validation.warnings.length > 0 || validation.errors.length > 0) && <div className={`validation-box ${validation.errors.length ? "validation-error" : ""}`}><span className="validation-icon">{validation.errors.length ? "!" : "✓"}</span><div><strong>{validation.errors.length ? "Review needed" : "Structure checked"}</strong>{[...validation.errors, ...validation.warnings].map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
+        {validation && (validation.warnings.length > 0 || validation.errors.length > 0) && <div className={`validation-box ${validation.errors.length ? "validation-error" : "validation-warning"}`}><span className="validation-icon">{validation.errors.length ? "!" : "✓"}</span><div><strong>{validation.errors.length ? "Review needed" : "Structure checked"}</strong>{[...validation.errors, ...validation.warnings].map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
         <div className="table-wrap"><table className="editable-table" style={{ width: `${table.column_widths.reduce((sum, width) => sum + width, 0) * displayScale}px` }}><colgroup>{table.column_widths.map((width, index) => <col key={index} style={{ width: `${width / table.column_widths.reduce((sum, value) => sum + value, 0) * 100}%` }} />)}</colgroup><tbody>{Array.from({ length: table.row_count }, (_, row) => <tr key={row} style={{ height: `${table.row_heights[row] * displayScale}px` }}>{Array.from({ length: table.column_count }, (_, column) => {
           const key = `${row},${column}`;
           if (cellMap.covered.has(key)) return null;
@@ -1015,5 +1016,6 @@ export default function Home() {
 
       <footer className="page-footer"><span>Made for schedules, built to keep their shape.</span><span className={`model-status ${modelInfo?.reachable ? "model-online" : ""}`}><span className="status-dot" /> {modelInfo?.model ? `Ollama · ${modelInfo.model}` : modelInfo?.reachable ? "Ollama is ready · set a vision model" : "Waiting for local Ollama"}</span></footer>
     </main>
+    </>
   );
 }
