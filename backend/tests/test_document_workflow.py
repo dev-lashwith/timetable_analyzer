@@ -118,6 +118,7 @@ def test_whole_page_extraction_returns_only_faculty_and_keeps_review_state():
     assert result["data"]["page_details"] == []
     assert result["data"]["faculty"][0]["abbreviation"] == "RK"
     assert result["verification_status"] == "unverified"
+    assert result["prompt_version"] == "faculty-only-v1"
     assert analyze.await_args.args[1]["layout"]["width"] > 0
 
     verified = asyncio.run(request("POST", f"/api/timetables/{timetable_id}/page-extraction/verify",
@@ -125,6 +126,8 @@ def test_whole_page_extraction_returns_only_faculty_and_keeps_review_state():
     assert verified.status_code == 200
     assert verified.json()["data"]["subjects"] == []
     assert verified.json()["data"]["faculty"][0]["verification_status"] == "verified"
+    saved = asyncio.run(request("GET", f"/api/timetables/{timetable_id}")).json()
+    assert saved["page_extraction"]["prompt_version"] == "faculty-only-v1"
 
 
 def test_uncropped_pdf_page_can_be_manually_cropped():

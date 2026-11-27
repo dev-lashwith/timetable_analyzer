@@ -57,7 +57,7 @@ type PageExtraction = {
     page_details: Array<{ class_name: string; semester: string; academic_session: string; room: string; confidence: number; evidence: string; verification_status: string }>;
   };
   confidence: number | null; verification_status: string; model: string; source_page: number;
-  ocr_source?: string;
+  ocr_source?: string; prompt_version?: string;
 };
 type DistinctValueRow = { value: string; categories: string[] };
 const EMPTY_GRID: CropInfo["grid"] = { row_count: 0, column_count: 0, cell_count: 0, width: 0, height: 0 };
@@ -115,6 +115,8 @@ export default function Home() {
   const [selectedTimetableId, setSelectedTimetableId] = useState("");
   const [savedTimetables, setSavedTimetables] = useState<SavedTimetable[]>([]);
   const [pageExtraction, setPageExtraction] = useState<PageExtraction | null>(null);
+  const [showFacultyJson, setShowFacultyJson] = useState(false);
+  const [showTimetableJson, setShowTimetableJson] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState("unverified");
   const [cropCoordinates, setCropCoordinates] = useState({ x: 0, y: 0, width: 0, height: 0 });
 
@@ -222,6 +224,25 @@ export default function Home() {
       categories: Array.from(item.categories),
     }));
   }, [uniqueValues, teachers, subjects, pageExtraction]);
+  const facultyJson = useMemo(() => pageExtraction ? JSON.stringify({
+    timetable_id: selectedTimetableId,
+    source_document: pdfName || null,
+    source_page: pageExtraction.source_page,
+    model: pageExtraction.model,
+    prompt_version: pageExtraction.prompt_version || null,
+    confidence: pageExtraction.confidence,
+    verification_status: pageExtraction.verification_status,
+    ocr_source: pageExtraction.ocr_source || null,
+    data: pageExtraction.data,
+  }, null, 2) : "", [selectedTimetableId, pdfName, pageExtraction]);
+  const timetableJson = useMemo(() => table ? JSON.stringify({
+    record_type: "timetable",
+    timetable_id: selectedTimetableId || null,
+    source_document: pdfName || null,
+    source_page: selectedPage?.page_number ?? cropInfo?.source_page ?? null,
+    verification_status: verificationStatus,
+    data: table,
+  }, null, 2) : "", [table, selectedTimetableId, pdfName, selectedPage?.page_number, cropInfo?.source_page, verificationStatus]);
   const extractedValues = uniqueValues;
   const assignedValues = useMemo(
     () => new Set([...teachers, ...subjects].map((value) => value.toLocaleLowerCase())),
@@ -310,6 +331,8 @@ export default function Home() {
     setTable(null);
     setValidation(null);
     setPageExtraction(null);
+    setShowFacultyJson(false);
+    setShowTimetableJson(false);
     setVerificationStatus("unverified");
     setTeachers([]);
     setSubjects([]);
@@ -350,11 +373,13 @@ export default function Home() {
       });
       setTable(data.table || null);
       setValidation(null);
+      setShowFacultyJson(false);
+      setShowTimetableJson(false);
       setPageExtraction(data.page_extraction ? {
         data: data.page_extraction.data, confidence: data.page_extraction.confidence,
         verification_status: data.page_extraction.verification_status,
         model: data.page_extraction.model, source_page: data.page.page_number,
-        ocr_source: data.page_extraction.ocr?.source,
+        ocr_source: data.page_extraction.ocr?.source, prompt_version: data.page_extraction.prompt_version,
       } : null);
       setVerificationStatus(data.version?.verification_status || "unverified");
       setTeachers([]);
@@ -391,6 +416,8 @@ export default function Home() {
         original_width: updated.width, original_height: updated.height });
       setTable(null);
       setPageExtraction(null);
+      setShowFacultyJson(false);
+      setShowTimetableJson(false);
       await refreshSavedTimetables();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -414,6 +441,8 @@ export default function Home() {
     setSelectedPage(null);
     setSelectedTimetableId("");
     setPageExtraction(null);
+    setShowFacultyJson(false);
+    setShowTimetableJson(false);
     setVerificationStatus("unverified");
     setTeachers([]);
     setSubjects([]);
@@ -596,7 +625,7 @@ export default function Home() {
       if (!response.ok) throw new Error(getApiError(data));
       setPageExtraction({ data: data.data, confidence: data.confidence,
         verification_status: data.verification_status, model: data.model, source_page: data.source_page,
-        ocr_source: data.ocr?.source });
+        ocr_source: data.ocr?.source, prompt_version: data.prompt_version });
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -630,6 +659,56 @@ export default function Home() {
     } finally {
       setLoading("");
     }
+  }
+
+  async function copyFacultyJson() {
+    if (!facultyJson) return;
+    try {
+      await navigator.clipboard.writeText(facultyJson);
+      showToast("Faculty JSON copied.");
+    } catch {
+      setError("Could not copy JSON here. Use Download JSON to save a shareable file.");
+    }
+  }
+
+  function downloadFacultyJson() {
+    if (!facultyJson || !pageExtraction) return;
+    const fileBase = (pdfName || "timetable").replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-") || "timetable";
+    const blob = new Blob([facultyJson], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${fileBase}-page-${pageExtraction.source_page}-faculty.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function copyTimetableJson() {
+    if (!timetableJson) return;
+    try {
+      await navigator.clipboard.writeText(timetableJson);
+      showToast("Timetable JSON copied.");
+    } catch {
+      setError("Could not copy JSON here. Use Download JSON to save a shareable file.");
+    }
+  }
+
+  function downloadTimetableJson() {
+    if (!timetableJson) return;
+    const fileBase = (pdfName || "timetable").replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-") || "timetable";
+    const pageNumber = selectedPage?.page_number ?? cropInfo?.source_page;
+    const pageSuffix = pageNumber ? `-page-${pageNumber}` : "";
+    const blob = new Blob([timetableJson], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${fileBase}${pageSuffix}-timetable.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function updateCell(row: number, column: number, text: string) {
@@ -818,7 +897,13 @@ export default function Home() {
       </section>}
 
       {table && <section className="editor-section" aria-live="polite">
-        <div className="section-heading editor-heading"><div><div className="section-kicker">STEP 2 <span>·</span> REVIEW & EDIT</div><h2>Your editable timetable.</h2></div><div className="table-stats"><span>{table.row_count} rows</span><span className="stats-separator">·</span><span>{table.column_count} columns</span><span className="stats-separator">·</span><span>{table.cells.length} cells</span></div></div>
+        <div className="section-heading editor-heading">
+          <div><div className="section-kicker">STEP 2 <span>·</span> REVIEW & EDIT</div><h2>Your editable timetable.</h2></div>
+          <div className="editor-heading-tools">
+            <div className="table-stats"><span>{table.row_count} rows</span><span className="stats-separator">·</span><span>{table.column_count} columns</span><span className="stats-separator">·</span><span>{table.cells.length} cells</span></div>
+            <button className="button button-secondary" onClick={() => setShowTimetableJson((open) => !open)}>{showTimetableJson ? "Hide JSON" : "View timetable JSON"}</button>
+          </div>
+        </div>
         <div className="constraint-summary" aria-label="Saved timetable details">
           <span className="constraint-summary-label">Timetable details</span>
           <span className="constraint-chip"><span>Class</span><strong>{table.class_name || constraints.className.trim() || "—"}</strong></span>
@@ -838,12 +923,29 @@ export default function Home() {
           if (!cell) return <td key={key} className="unresolved-cell"><textarea aria-label={`Row ${row + 1}, column ${column + 1}`} value="" placeholder="Blank" onChange={(event) => updateCell(row, column, event.target.value)} /></td>;
           return <td key={key} rowSpan={cell.rowspan} colSpan={cell.colspan}><textarea aria-label={`Row ${row + 1}, column ${column + 1}${cell.rowspan > 1 || cell.colspan > 1 ? ", merged cell" : ""}`} value={cell.text} placeholder="Blank" onChange={(event) => updateCell(cell.row, cell.column, event.target.value)} /></td>;
         })}</tr>)}</tbody></table></div>
+        {showTimetableJson && <section className="json-viewer-panel timetable-json-panel" aria-label="Editable timetable JSON">
+          <div className="json-viewer-heading">
+            <div><div className="section-kicker">CURRENT EDITOR DATA <span>·</span> JSON VIEW</div><h3>Timetable data</h3></div>
+            <div className="editor-actions json-viewer-actions">
+              <button className="button button-secondary" onClick={() => void copyTimetableJson()}>Copy JSON</button>
+              <button className="button button-secondary" onClick={downloadTimetableJson}>Download JSON</button>
+              <button className="button button-secondary" onClick={() => setShowTimetableJson(false)}>Close</button>
+            </div>
+          </div>
+          <p className="unique-hint">This is the table currently shown in the editor. Save corrections to store edits as a new timetable version; the original AI extraction remains separate.</p>
+          <pre className="json-viewer-code">{timetableJson}</pre>
+        </section>}
         {selectedTimetableId && <section className="page-data-section faculty-results" aria-label="Faculty extracted from the full source page">
           <div className="section-heading unique-heading">
             <div><div className="section-kicker">FULL SOURCE PAGE <span>·</span> FACULTY EXTRACTION</div><h2>Faculty table.</h2></div>
-            <button className="button button-secondary" onClick={() => void analyzeOriginalPage()} disabled={loading !== ""}>
-              {loading === "analyze" ? <><span className="spinner" />Reading full page…</> : pageExtraction ? "Re-analyze faculty" : "Analyze faculty table"}
-            </button>
+            <div className="editor-actions faculty-actions">
+              {pageExtraction && <button className="button button-secondary" onClick={() => setShowFacultyJson((open) => !open)}>
+                {showFacultyJson ? "Hide JSON" : "View JSON"}
+              </button>}
+              <button className="button button-secondary" onClick={() => void analyzeOriginalPage()} disabled={loading !== ""}>
+                {loading === "analyze" ? <><span className="spinner" />Reading full page…</> : pageExtraction ? "Re-analyze faculty" : "Analyze faculty table"}
+              </button>
+            </div>
           </div>
           <p className="unique-hint">After timetable extraction, MiniCPM-V checks the entire original page and lists only rows from its faculty table.</p>
           {pageExtraction && <div className="page-analysis-status">Page {pageExtraction.source_page} · {pageExtraction.model} · OCR: {pageExtraction.ocr_source || "not available"} · {pageExtraction.confidence == null ? "No confidence score" : `${Math.round(pageExtraction.confidence * 100)}% average confidence`}</div>}
@@ -857,6 +959,18 @@ export default function Home() {
               </tr>) : <tr><td colSpan={6} className="classification-empty">{pageExtraction ? "No faculty entries were found on this page." : loading === "analyze" ? "Reading the full source page…" : "Faculty details will appear here after analysis."}</td></tr>}</tbody>
             </table></div>
           </div>
+          {pageExtraction && showFacultyJson && <section className="json-viewer-panel" aria-label="Faculty extraction JSON">
+            <div className="json-viewer-heading">
+              <div><div className="section-kicker">SAVED RECORD <span>·</span> JSON VIEW</div><h3>Faculty extraction data</h3></div>
+              <div className="editor-actions json-viewer-actions">
+                <button className="button button-secondary" onClick={() => void copyFacultyJson()}>Copy JSON</button>
+                <button className="button button-secondary" onClick={downloadFacultyJson}>Download JSON</button>
+                <button className="button button-secondary" onClick={() => setShowFacultyJson(false)}>Close</button>
+              </div>
+            </div>
+            <p className="unique-hint">The data object matches the stored extraction JSON. The app keeps the record in its local database; Download JSON creates a standalone file to share.</p>
+            <pre className="json-viewer-code">{facultyJson}</pre>
+          </section>}
           {pageExtraction && <div className="verification-actions"><span>Faculty values: <strong>{pageExtraction.verification_status.replaceAll("_", " ")}</strong></span>
             <button className="button button-secondary" onClick={() => void verifyOriginalPage("needs_review")} disabled={loading !== ""}>Needs review</button>
             <button className="button button-primary" onClick={() => void verifyOriginalPage("verified")} disabled={loading !== ""}>Mark faculty verified</button>

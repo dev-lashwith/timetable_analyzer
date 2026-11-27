@@ -139,6 +139,7 @@ def _snapshot(timetable_id: str) -> dict:
         "original_extraction": json.loads(original["table_json"]) if original else None,
         "page_extraction": {
             "id": extraction["id"], "model": extraction["model"],
+            "prompt_version": extraction["prompt_version"],
             "ocr": json.loads(extraction["ocr_json"]),
             "data": json.loads(extraction["extraction_json"]),
             "confidence": extraction["confidence"],
@@ -492,7 +493,8 @@ async def analyze_original_page(timetable_id: str) -> dict:
             (timetable_id, json.dumps({"model": OLLAMA_MODEL, "ocr_source": ocr_layout["source"]})),
         )
     return {"data": extraction, "confidence": confidence, "verification_status": "unverified",
-            "model": OLLAMA_MODEL, "source_page": row["page_number"], "ocr": ocr_layout}
+            "model": OLLAMA_MODEL, "prompt_version": "faculty-only-v1",
+            "source_page": row["page_number"], "ocr": ocr_layout}
 
 
 @router.post("/timetables/{timetable_id}/page-extraction/verify")

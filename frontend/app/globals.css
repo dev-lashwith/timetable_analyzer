@@ -185,9 +185,16 @@ h2 { font-size: 22px; line-height: 1.25; letter-spacing: -.75px; margin: 6px 0 0
 .faculty-table th:nth-child(3), .faculty-table th:nth-child(4) { width: 11%; }
 .faculty-table th:nth-child(5) { width: 15%; }
 .faculty-table th:nth-child(6) { width: 29%; }
+.faculty-actions { align-items: center; }
+.json-viewer-panel { margin-top: 12px; padding: 14px; border: 1px solid #d7dfeb; border-radius: 10px; background: #f8fafc; }
+.json-viewer-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.json-viewer-heading h3 { margin: 5px 0 0; color: #0b1220; font-size: 15px; font-weight: 700; letter-spacing: -.3px; }
+.json-viewer-actions { align-items: center; }
+.json-viewer-code { max-height: 480px; margin: 0; padding: 14px; overflow: auto; border-radius: 8px; background: #111827; color: #e5edf8; font: 12px/1.6 Consolas, "Courier New", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .verification-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .verification-actions > span { margin-right: auto; color: #687384; font-size: 11px; }
 .editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.editor-heading-tools { display: flex; align-items: center; gap: 12px; }
 
 @media (max-width: 680px) {
   .page-shell { padding: 0 18px 24px; }
@@ -232,6 +239,9 @@ h2 { font-size: 22px; line-height: 1.25; letter-spacing: -.75px; margin: 6px 0 0
   .page-picker { align-items: stretch; flex-direction: column; gap: 4px; }
   .page-picker .constraint-field { width: 100%; }
   .verification-actions { align-items: stretch; flex-direction: column; }
+  .json-viewer-heading { align-items: stretch; flex-direction: column; }
+  .json-viewer-actions { display: grid; grid-template-columns: 1fr; }
+  .editor-heading-tools { align-items: stretch; flex-direction: column; }
   .page-footer { margin-top: 37px; flex-direction: column; }
 }
 
